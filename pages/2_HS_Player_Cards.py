@@ -5,16 +5,16 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-from matplotlib.patches import FancyBboxPatch
+from matplotlib.patches import FancyBboxPatch, Circle
 from io import BytesIO
 import warnings
 warnings.filterwarnings("ignore")
 
-st.set_page_config(page_title="HS Player Cards", page_icon="🏫", layout="wide")
-st.title("🏫 High School Player Cards")
+st.set_page_config(page_title="MCAL Player Cards", page_icon="🏫", layout="wide")
+st.title("MCAL Player Cards")
 
 BG_COLOR='#0d0d0d'; PANEL_COLOR='#161616'; BORDER_COLOR='#2a2a2a'
-TEXT_COLOR='#e8e8e8'; DIM_COLOR='#888888'
+TEXT_COLOR='#e8e8e8'; DIM_COLOR='#aaaaaa'
 
 STAT_DEFS = [
     ('avg','AVG',True,'.3f'),('obp','OBP',True,'.3f'),('slg','SLG',True,'.3f'),
@@ -58,8 +58,10 @@ def compute_stats(df):
     d['ops']=d['obp']+d['slg']
     d['iso']=d['slg']-d['avg']
     pa=d['ab']+d['bb']+d['hbp']+d['sf']
-    woba_num=(0.69*d['bb'])+(0.72*d['hbp'])+(0.88*d['1b'])+(1.25*d['2b'])+(1.59*d['3b'])+(2.05*d['hr'])
-    d['woba']=np.where(pa>0,woba_num/pa,0)
+    # 2025 MLB wOBA weights
+    woba_num=(0.690*d['bb'])+(0.722*d['hbp'])+(0.881*d['1b'])+(1.254*d['2b'])+(1.594*d['3b'])+(2.058*d['hr'])
+    woba_den=d['ab']+d['bb']+d['hbp']+d['sf']
+    d['woba']=np.where(woba_den>0,woba_num/woba_den,0)
     d['kpct']=np.where(pa>0,d['k']/pa*100,0)
     d['bbpct']=np.where(pa>0,d['bb']/pa*100,0)
     d['pa']=pa
@@ -74,97 +76,165 @@ def load_data():
     except FileNotFoundError:
         return None
 
+def fmt_val(val, fmt):
+    if fmt=='.3f':
+        return f"{val:.3f}".lstrip('0') if float(val)<1 else f"{val:.3f}"
+    elif fmt=='.1f':
+        return f"{val:.1f}%"
+    else:
+        return str(int(float(val)))
+
 def build_card(p, qual, min_ab, selected_year, all_years):
-    fig=plt.figure(figsize=(20,14),facecolor=BG_COLOR)
-    outer=gridspec.GridSpec(3,1,figure=fig,height_ratios=[2.8,5.5,5.5],
-                            hspace=0.18,left=0.04,right=0.96,top=0.97,bottom=0.03)
+    fig=plt.figure(figsize=(22,15),facecolor=BG_COLOR)
+    outer=gridspec.GridSpec(3,1,figure=fig,height_ratios=[2.6,6.0,5.0],
+                            hspace=0.16,left=0.03,right=0.97,top=0.97,bottom=0.03)
+    pool_years=f"{min(all_years)}–{max(all_years)}" if len(all_years)>1 else str(all_years[0])
+    is_qual=p['ab']>=min_ab
+
+    # ── HEADER ────────────────────────────────────────────────────────────────
     ax_hdr=fig.add_subplot(outer[0]); ax_hdr.set_facecolor(PANEL_COLOR); ax_hdr.axis('off')
     ax_hdr.set_xlim(0,1); ax_hdr.set_ylim(0,1)
-    ax_hdr.plot([0,1],[0.997,0.997],color='#cc0000',linewidth=4,transform=ax_hdr.transAxes,clip_on=False)
-    ax_hdr.text(0.01,0.72,p['player'].upper(),transform=ax_hdr.transAxes,color=TEXT_COLOR,fontsize=22,fontweight='bold',va='center')
-    ax_hdr.text(0.01,0.25,f"{p['team']}  ·  {p['pos']}  ·  {selected_year}",
-                transform=ax_hdr.transAxes,color=DIM_COLOR,fontsize=11,va='center')
-    is_qual=p['ab']>=min_ab
-    pool_years=f"{min(all_years)}–{max(all_years)}" if len(all_years)>1 else str(all_years[0])
-    ax_hdr.text(0.01,0.0,
+    ax_hdr.plot([0,1],[0.998,0.998],color='#cc0000',linewidth=5,transform=ax_hdr.transAxes,clip_on=False)
+
+    # Name
+    ax_hdr.text(0.01,0.74,p['player'].upper(),transform=ax_hdr.transAxes,color=TEXT_COLOR,
+                fontsize=26,fontweight='bold',va='center')
+    # School / Pos / Year — white, bold, larger
+    ax_hdr.text(0.01,0.28,f"{p['team']}  ·  {p['pos']}  ·  {selected_year}",
+                transform=ax_hdr.transAxes,color=TEXT_COLOR,fontsize=15,fontweight='bold',va='center')
+    # Qualified badge
+    badge_col='#2ecc71' if is_qual else '#e74c3c'
+    ax_hdr.text(0.01,0.02,
                 f"{'QUALIFIED' if is_qual else 'NOT QUALIFIED'}  ({int(p['ab'])} AB)  ·  Percentiles vs {len(qual)}-player pool ({pool_years})",
-                transform=ax_hdr.transAxes,color='#2ecc71' if is_qual else '#e74c3c',fontsize=9,fontweight='bold',va='bottom')
+                transform=ax_hdr.transAxes,color=badge_col,fontsize=9,fontweight='bold',va='bottom')
+
+    # Stat boxes
     keys=['avg','obp','slg','ops','woba','iso','hr','rbi','sb','ab']
-    labels={'avg':'AVG','obp':'OBP','slg':'SLG','ops':'OPS','woba':'wOBA','iso':'ISO','hr':'HR','rbi':'RBI','sb':'SB','ab':'AB'}
-    n_boxes=len(keys); bx0=0.30; bw=0.68; bh=0.88; by0=0.06; cw=bw/n_boxes
+    labels={'avg':'AVG','obp':'OBP','slg':'SLG','ops':'OPS','woba':'wOBA',
+            'iso':'ISO','hr':'HR','rbi':'RBI','sb':'SB','ab':'AB'}
+    rate_keys={'avg','obp','slg','ops','woba','iso'}
+    n_boxes=len(keys); bx0=0.30; bw=0.68; bh=0.90; by0=0.05; cw=bw/n_boxes
     ax_hdr.add_patch(FancyBboxPatch((bx0,by0),bw,bh,boxstyle='round,pad=0.005',
         facecolor='#1a1a1a',edgecolor=BORDER_COLOR,linewidth=1.2,transform=ax_hdr.transAxes,zorder=2))
     for i,key in enumerate(keys):
         cx=bx0+cw*(i+0.5); val=p.get(key,0)
-        val_str=(f"{float(val):.3f}".lstrip('0') if key in ['avg','obp','slg','ops','woba','iso'] and float(val)<1
-                 else f"{float(val):.3f}" if key in ['avg','obp','slg','ops','woba','iso']
-                 else str(int(float(val))))
+        fmt=next((s[3] for s in STAT_DEFS if s[0]==key),'d')
+        val_str=fmt_val(val,fmt)
         sd=next((s for s in STAT_DEFS if s[0]==key),None)
         col=(pct_color(get_percentile(float(val),qual[key],sd[2])) if sd and key in qual.columns and len(qual)>0 else TEXT_COLOR)
-        ax_hdr.text(cx,by0+bh*0.68,val_str,transform=ax_hdr.transAxes,color=col,fontsize=15,fontweight='bold',ha='center',va='center',zorder=3)
-        ax_hdr.text(cx,by0+bh*0.22,labels[key],transform=ax_hdr.transAxes,color='#cccccc',fontsize=10,ha='center',va='center',zorder=3)
+        ax_hdr.text(cx,by0+bh*0.68,val_str,transform=ax_hdr.transAxes,color=col,
+                    fontsize=14,fontweight='bold',ha='center',va='center',zorder=3)
+        ax_hdr.text(cx,by0+bh*0.22,labels[key],transform=ax_hdr.transAxes,color=TEXT_COLOR,
+                    fontsize=10,fontweight='bold',ha='center',va='center',zorder=3)
         if i<n_boxes-1:
-            ax_hdr.plot([bx0+cw*(i+1)]*2,[by0+0.06,by0+bh-0.06],color=BORDER_COLOR,linewidth=0.7,transform=ax_hdr.transAxes,zorder=3)
+            ax_hdr.plot([bx0+cw*(i+1)]*2,[by0+0.05,by0+bh-0.05],color=BORDER_COLOR,
+                        linewidth=0.7,transform=ax_hdr.transAxes,zorder=3)
 
-    def draw_pct_section(ax, stat_keys):
+    # ── PERCENTILE BARS ───────────────────────────────────────────────────────
+    def draw_pct_section(ax, stat_keys, section_label):
         ax.set_facecolor(PANEL_COLOR); ax.axis('off'); ax.set_xlim(0,1); ax.set_ylim(0,1)
-        n=len(stat_keys); row_h=0.92/n; y_start=0.97
+        n=len(stat_keys); row_h=0.88/n; y_start=0.93
+
+        ax.text(0.01,0.99,section_label,ha='left',va='top',color=TEXT_COLOR,
+                fontsize=11,fontweight='bold',transform=ax.transAxes)
+        ax.text(0.99,0.99,f'{pool_years} league pool',ha='right',va='top',color=DIM_COLOR,
+                fontsize=9,transform=ax.transAxes)
+
         for i,key in enumerate(stat_keys):
             sd=next((s for s in STAT_DEFS if s[0]==key),None)
             if not sd: continue
-            _,label,higher,fmt=sd; val=float(p.get(key,0))
+            _,label,higher,fmt=sd
+            val=float(p.get(key,0))
             pct=get_percentile(val,qual[key],higher) if key in qual.columns and len(qual)>0 else 50
-            color=pct_color(pct); y=y_start-row_h*(i+0.5)
-            bl=0.18; br=0.78; bw2=br-bl; bh2=row_h*0.32; by2=y-bh2/2
-            ax.text(bl-0.02,y,label,ha='right',va='center',color=DIM_COLOR,fontsize=11,fontweight='bold',transform=ax.transAxes)
-            ax.add_patch(FancyBboxPatch((bl,by2),bw2,bh2,boxstyle='round,pad=0.002',facecolor='#252525',edgecolor='none',transform=ax.transAxes,zorder=1))
-            ax.add_patch(FancyBboxPatch((bl,by2),max(bw2*pct/100,0.004),bh2,boxstyle='round,pad=0.002',facecolor=color,edgecolor='none',transform=ax.transAxes,zorder=2))
-            ax.plot([bl+bw2*0.5]*2,[by2-0.005,by2+bh2+0.005],color='#555555',linewidth=1.0,transform=ax.transAxes,zorder=3)
-            val_str=(f"{val:.3f}".lstrip('0') if fmt=='.3f' and val<1
-                     else f"{val:.3f}" if fmt=='.3f'
-                     else f"{val:.1f}%" if fmt=='.1f'
-                     else str(int(val)))
-            ax.text(br+0.02,y,val_str,ha='left',va='center',color=color,fontsize=11,fontweight='bold',transform=ax.transAxes)
-            ax.text(0.99,y,f"{int(pct)}th",ha='right',va='center',color=DIM_COLOR,fontsize=9,transform=ax.transAxes)
-        ax.text(0.01,0.99,f'PERCENTILE RANKINGS  (vs {pool_years} league pool)',
-                ha='left',va='top',color=TEXT_COLOR,fontsize=10,fontweight='bold',transform=ax.transAxes)
+            color=pct_color(pct)
+            y=y_start-row_h*(i+0.5)
 
-    body_gs=gridspec.GridSpecFromSubplotSpec(1,2,subplot_spec=outer[1],wspace=0.12)
-    draw_pct_section(fig.add_subplot(body_gs[0]),['avg','obp','slg','ops','woba','iso','hr','rbi','r','h'])
-    draw_pct_section(fig.add_subplot(body_gs[1]),['2b','3b','sb','bb','k','kpct','bbpct'])
+            # Stat label — white, bold
+            ax.text(0.01,y,label,ha='left',va='center',color=TEXT_COLOR,
+                    fontsize=12,fontweight='bold',transform=ax.transAxes)
 
+            # Bar track
+            bl=0.14; br=0.72; bw2=br-bl; bh2=row_h*0.28; by2=y-bh2/2
+            ax.add_patch(FancyBboxPatch((bl,by2),bw2,bh2,boxstyle='round,pad=0.002',
+                facecolor='#2a2a2a',edgecolor='none',transform=ax.transAxes,zorder=1))
+
+            # Fill bar
+            fill_w=max(bw2*pct/100,0.004)
+            ax.add_patch(FancyBboxPatch((bl,by2),fill_w,bh2,boxstyle='round,pad=0.002',
+                facecolor=color,edgecolor='none',transform=ax.transAxes,zorder=2))
+
+            # 50th percentile tick
+            ax.plot([bl+bw2*0.5]*2,[by2-0.006,by2+bh2+0.006],color='#666666',
+                    linewidth=1.2,transform=ax.transAxes,zorder=3)
+
+            # Savant-style circle with value inside — colored circle, white text
+            circle_x=br+0.055; circle_r=row_h*0.30
+            circ=Circle((circle_x,y),circle_r,transform=ax.transAxes,
+                         facecolor=color,edgecolor='white',linewidth=1.2,zorder=5)
+            ax.add_patch(circ)
+            val_str=fmt_val(val,fmt)
+            ax.text(circle_x,y,val_str,ha='center',va='center',color='white',
+                    fontsize=9,fontweight='bold',transform=ax.transAxes,zorder=6)
+
+            # Percentile number — white
+            ax.text(0.99,y,f"{int(pct)}th",ha='right',va='center',color=TEXT_COLOR,
+                    fontsize=10,fontweight='bold',transform=ax.transAxes)
+
+    body_gs=gridspec.GridSpecFromSubplotSpec(1,2,subplot_spec=outer[1],wspace=0.10)
+    draw_pct_section(fig.add_subplot(body_gs[0]),
+                     ['avg','obp','slg','ops','woba','iso','kpct','bbpct'],
+                     'RATE STATS')
+    draw_pct_section(fig.add_subplot(body_gs[1]),
+                     ['hr','rbi','r','h','2b','3b','sb','bb','k'],
+                     'COUNTING STATS')
+
+    # ── COUNTING TABLE ────────────────────────────────────────────────────────
     ax_tbl=fig.add_subplot(outer[2]); ax_tbl.set_facecolor(PANEL_COLOR); ax_tbl.axis('off')
     ax_tbl.set_xlim(0,1); ax_tbl.set_ylim(0,1)
     tbl_cols=['ab','h','1b','2b','3b','hr','r','rbi','bb','k','sb','hbp','pa']
     tbl_labels=['AB','H','1B','2B','3B','HR','R','RBI','BB','K','SB','HBP','PA']
     cw3=1.0/len(tbl_cols)
+
+    ax_tbl.text(0.01,0.97,f'{selected_year} SEASON STATS',ha='left',va='top',
+                color=TEXT_COLOR,fontsize=13,fontweight='bold',transform=ax_tbl.transAxes)
+    ax_tbl.text(0.99,0.97,f"League pool: {len(qual)} qualified players · {pool_years} · min {min_ab} AB",
+                ha='right',va='top',color=DIM_COLOR,fontsize=9,transform=ax_tbl.transAxes)
+
+    # Column headers — white, bold
     for ci,lbl in enumerate(tbl_labels):
-        ax_tbl.text((ci+0.5)*cw3,0.88,lbl,ha='center',va='center',color='#cccccc',fontsize=12,fontweight='bold',transform=ax_tbl.transAxes)
-    ax_tbl.plot([0.01,0.99],[0.72,0.72],color=BORDER_COLOR,linewidth=0.8,transform=ax_tbl.transAxes)
+        ax_tbl.text((ci+0.5)*cw3,0.72,lbl,ha='center',va='center',color=TEXT_COLOR,
+                    fontsize=13,fontweight='bold',transform=ax_tbl.transAxes)
+    ax_tbl.plot([0.01,0.99],[0.58,0.58],color=BORDER_COLOR,linewidth=0.8,transform=ax_tbl.transAxes)
+
+    # Player values
     for ci,key in enumerate(tbl_cols):
         val=p.get(key,0); sd=next((s for s in STAT_DEFS if s[0]==key),None)
         col=(pct_color(get_percentile(float(val),qual[key],sd[2])) if sd and key in qual.columns and len(qual)>0 else TEXT_COLOR)
-        ax_tbl.text((ci+0.5)*cw3,0.42,str(int(float(val))),ha='center',va='center',color=col,fontsize=14,fontweight='bold',transform=ax_tbl.transAxes)
-    ax_tbl.plot([0.01,0.99],[0.28,0.28],color=BORDER_COLOR,linewidth=0.5,transform=ax_tbl.transAxes)
-    ax_tbl.text(0.01,0.18,'LG AVG',ha='left',va='center',color=DIM_COLOR,fontsize=9,transform=ax_tbl.transAxes)
+        ax_tbl.text((ci+0.5)*cw3,0.38,str(int(float(val))),ha='center',va='center',
+                    color=col,fontsize=15,fontweight='bold',transform=ax_tbl.transAxes)
+
+    # League avg row — white, readable
+    ax_tbl.plot([0.01,0.99],[0.22,0.22],color=BORDER_COLOR,linewidth=0.5,transform=ax_tbl.transAxes)
+    ax_tbl.text(0.005,0.10,'LG AVG',ha='left',va='center',color=TEXT_COLOR,
+                fontsize=10,fontweight='bold',transform=ax_tbl.transAxes)
     for ci,key in enumerate(tbl_cols):
         if key in qual.columns:
-            ax_tbl.text((ci+0.5)*cw3,0.12,f"{qual[key].mean():.1f}",ha='center',va='center',color=DIM_COLOR,fontsize=9,transform=ax_tbl.transAxes)
-    ax_tbl.text(0.01,0.97,f'{selected_year} SEASON STATS',ha='left',va='top',color=TEXT_COLOR,fontsize=11,fontweight='bold',transform=ax_tbl.transAxes)
-    ax_tbl.text(0.99,0.97,f"League pool: {len(qual)} qualified players · {pool_years} · min {min_ab} AB",
-                ha='right',va='top',color=DIM_COLOR,fontsize=9,transform=ax_tbl.transAxes)
-    fig.text(0.5,0.005,'Stats via MaxPreps  ·  Percentiles vs multi-year qualified league pool',
-             ha='center',va='bottom',color='#555555',fontsize=9,style='italic')
+            avg_val=qual[key].mean()
+            ax_tbl.text((ci+0.5)*cw3,0.10,f"{avg_val:.1f}",ha='center',va='center',
+                        color=TEXT_COLOR,fontsize=10,fontweight='bold',transform=ax_tbl.transAxes)
+
+    fig.text(0.5,0.003,'Stats via MaxPreps  ·  wOBA uses 2025 MLB linear weights  ·  Percentiles vs multi-year qualified league pool',
+             ha='center',va='bottom',color='#555555',fontsize=8,style='italic')
 
     buf=BytesIO()
-    plt.savefig(buf,dpi=180,bbox_inches='tight',facecolor=BG_COLOR,edgecolor='none',format='png')
+    plt.savefig(buf,dpi=220,bbox_inches='tight',facecolor=BG_COLOR,edgecolor='none',format='png')
     plt.close(fig); buf.seek(0)
     return buf
 
 # ── Load data ─────────────────────────────────────────────────────────────────
 df=load_data()
 if df is None:
-    st.error("No data file found. Make sure `data/hitters.csv` is in the repo.")
+    st.error("No data file found. Make sure `hitters.csv` is in the repo root.")
     st.stop()
 
 all_years=sorted(df['year'].astype(int).unique().tolist())
@@ -188,12 +258,7 @@ if not lb_df.empty and lb_stat in lb_df.columns:
     top=lb_df.nlargest(10,lb_stat)[['player','team','year',lb_stat,'ab']].copy()
     top['year']=top['year'].astype(int)
     fmt=next((s[3] for s in STAT_DEFS if s[0]==lb_stat),'.3f')
-    if fmt=='.3f':
-        top[lb_stat]=top[lb_stat].apply(lambda x: f"{x:.3f}".lstrip('0') if x<1 else f"{x:.3f}")
-    elif fmt=='.1f':
-        top[lb_stat]=top[lb_stat].apply(lambda x: f"{x:.1f}%")
-    else:
-        top[lb_stat]=top[lb_stat].apply(lambda x: str(int(x)))
+    top[lb_stat]=top[lb_stat].apply(lambda x: fmt_val(x,fmt))
     top.columns=['Player','Team','Year',LEADERBOARD_LABELS[lb_stat],'AB']
     top.index=range(1,len(top)+1)
     st.dataframe(top,use_container_width=True)
