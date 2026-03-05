@@ -25,6 +25,11 @@ STAT_DEFS = [
     ('kpct','K%',False,'.1f'),('bbpct','BB%',True,'.1f'),
 ]
 
+DATA_PATH = 'data/hitters.csv'
+LEADERBOARD_STATS = ['avg','obp','slg','ops','woba','iso','hr','rbi','sb']
+LEADERBOARD_LABELS = {'avg':'AVG','obp':'OBP','slg':'SLG','ops':'OPS',
+                      'woba':'wOBA','iso':'ISO','hr':'HR','rbi':'RBI','sb':'SB'}
+
 def pct_color(pct):
     if pct >= 50:
         t=(pct-50)/50; r=int(255*t+220*(1-t)); g=int(50*t+220*(1-t)); b=int(50*t+220*(1-t))
@@ -61,25 +66,29 @@ def compute_stats(df):
     d['player_norm']=d['player'].str.strip().str.lower()
     return d
 
+@st.cache_data
+def load_data():
+    try:
+        raw=pd.read_csv(DATA_PATH)
+        return compute_stats(raw)
+    except FileNotFoundError:
+        return None
+
 def build_card(p, qual, min_ab, selected_year, all_years):
     fig=plt.figure(figsize=(20,14),facecolor=BG_COLOR)
     outer=gridspec.GridSpec(3,1,figure=fig,height_ratios=[2.8,5.5,5.5],
                             hspace=0.18,left=0.04,right=0.96,top=0.97,bottom=0.03)
-
-    # HEADER
     ax_hdr=fig.add_subplot(outer[0]); ax_hdr.set_facecolor(PANEL_COLOR); ax_hdr.axis('off')
     ax_hdr.set_xlim(0,1); ax_hdr.set_ylim(0,1)
     ax_hdr.plot([0,1],[0.997,0.997],color='#cc0000',linewidth=4,transform=ax_hdr.transAxes,clip_on=False)
     ax_hdr.text(0.01,0.72,p['player'].upper(),transform=ax_hdr.transAxes,color=TEXT_COLOR,fontsize=22,fontweight='bold',va='center')
     ax_hdr.text(0.01,0.25,f"{p['team']}  ·  {p['pos']}  ·  {selected_year}",
                 transform=ax_hdr.transAxes,color=DIM_COLOR,fontsize=11,va='center')
-
     is_qual=p['ab']>=min_ab
     pool_years=f"{min(all_years)}–{max(all_years)}" if len(all_years)>1 else str(all_years[0])
     ax_hdr.text(0.01,0.0,
                 f"{'QUALIFIED' if is_qual else 'NOT QUALIFIED'}  ({int(p['ab'])} AB)  ·  Percentiles vs {len(qual)}-player pool ({pool_years})",
                 transform=ax_hdr.transAxes,color='#2ecc71' if is_qual else '#e74c3c',fontsize=9,fontweight='bold',va='bottom')
-
     keys=['avg','obp','slg','ops','woba','iso','hr','rbi','sb','ab']
     labels={'avg':'AVG','obp':'OBP','slg':'SLG','ops':'OPS','woba':'wOBA','iso':'ISO','hr':'HR','rbi':'RBI','sb':'SB','ab':'AB'}
     n_boxes=len(keys); bx0=0.30; bw=0.68; bh=0.88; by0=0.06; cw=bw/n_boxes
@@ -87,8 +96,8 @@ def build_card(p, qual, min_ab, selected_year, all_years):
         facecolor='#1a1a1a',edgecolor=BORDER_COLOR,linewidth=1.2,transform=ax_hdr.transAxes,zorder=2))
     for i,key in enumerate(keys):
         cx=bx0+cw*(i+0.5); val=p.get(key,0)
-        val_str=(f"{float(val):.3f}".lstrip('0') if key in ['avg','obp','slg','ops'] and float(val)<1
-                 else f"{float(val):.3f}" if key in ['avg','obp','slg','ops']
+        val_str=(f"{float(val):.3f}".lstrip('0') if key in ['avg','obp','slg','ops','woba','iso'] and float(val)<1
+                 else f"{float(val):.3f}" if key in ['avg','obp','slg','ops','woba','iso']
                  else str(int(float(val))))
         sd=next((s for s in STAT_DEFS if s[0]==key),None)
         col=(pct_color(get_percentile(float(val),qual[key],sd[2])) if sd and key in qual.columns and len(qual)>0 else TEXT_COLOR)
@@ -124,7 +133,6 @@ def build_card(p, qual, min_ab, selected_year, all_years):
     draw_pct_section(fig.add_subplot(body_gs[0]),['avg','obp','slg','ops','woba','iso','hr','rbi','r','h'])
     draw_pct_section(fig.add_subplot(body_gs[1]),['2b','3b','sb','bb','k','kpct','bbpct'])
 
-    # COUNTING STATS TABLE
     ax_tbl=fig.add_subplot(outer[2]); ax_tbl.set_facecolor(PANEL_COLOR); ax_tbl.axis('off')
     ax_tbl.set_xlim(0,1); ax_tbl.set_ylim(0,1)
     tbl_cols=['ab','h','1b','2b','3b','hr','r','rbi','bb','k','sb','hbp','pa']
@@ -153,57 +161,67 @@ def build_card(p, qual, min_ab, selected_year, all_years):
     plt.close(fig); buf.seek(0)
     return buf
 
-# ── UI ────────────────────────────────────────────────────────────────────────
-uploaded=st.file_uploader("Upload league stats CSV",type="csv")
+# ── Load data ─────────────────────────────────────────────────────────────────
+df=load_data()
+if df is None:
+    st.error("No data file found. Make sure `data/hitters.csv` is in the repo.")
+    st.stop()
 
-with st.expander("📋 CSV Format"):
-    st.markdown("Columns: `player, team, year, pos, ab, h, 2b, 3b, hr, r, rbi, bb, k, sb, hbp, sf` — one row per player per season.")
-    template=pd.DataFrame([{'player':'John Smith','team':'Lincoln High','year':2024,'pos':'SS',
-                             'ab':87,'h':31,'2b':6,'3b':1,'hr':3,'r':22,'rbi':18,'bb':12,'k':14,'sb':8,'hbp':2,'sf':1}])
-    st.download_button("⬇ Download template",data=template.to_csv(index=False),file_name="template.csv",mime="text/csv")
+all_years=sorted(df['year'].astype(int).unique().tolist())
+min_ab=int(df['ab'].quantile(0.40))
+qual=df[df['ab']>=min_ab].copy()
+pool_years=f"{min(all_years)}–{max(all_years)}" if len(all_years)>1 else str(all_years[0])
 
-if uploaded:
-    try:
-        raw=pd.read_csv(uploaded)
-        df=compute_stats(raw)
+# ── LEADERBOARD ───────────────────────────────────────────────────────────────
+st.markdown("### 🏆 Leaderboard")
+lb_col1,lb_col2=st.columns(2)
+with lb_col1:
+    lb_stat=st.selectbox("Sort by",LEADERBOARD_STATS,format_func=lambda x: LEADERBOARD_LABELS[x])
+with lb_col2:
+    lb_year=st.selectbox("Season",["All years"]+[str(y) for y in sorted(all_years,reverse=True)])
 
-        all_years=sorted(df['year'].astype(int).unique().tolist())
-        all_seasons=df.copy()  # full multi-year pool for percentiles
+lb_df=qual.copy()
+if lb_year != "All years":
+    lb_df=lb_df[lb_df['year'].astype(int)==int(lb_year)]
 
-        st.success(f"Loaded {len(df)} season rows · {df['player_norm'].nunique()} players · {all_years}")
+if not lb_df.empty and lb_stat in lb_df.columns:
+    top=lb_df.nlargest(10,lb_stat)[['player','team','year',lb_stat,'ab']].copy()
+    top['year']=top['year'].astype(int)
+    fmt=next((s[3] for s in STAT_DEFS if s[0]==lb_stat),'.3f')
+    if fmt=='.3f':
+        top[lb_stat]=top[lb_stat].apply(lambda x: f"{x:.3f}".lstrip('0') if x<1 else f"{x:.3f}")
+    elif fmt=='.1f':
+        top[lb_stat]=top[lb_stat].apply(lambda x: f"{x:.1f}%")
+    else:
+        top[lb_stat]=top[lb_stat].apply(lambda x: str(int(x)))
+    top.columns=['Player','Team','Year',LEADERBOARD_LABELS[lb_stat],'AB']
+    top.index=range(1,len(top)+1)
+    st.dataframe(top,use_container_width=True)
 
-        # Min AB slider — based on full pool
-        suggested_min=int(all_seasons['ab'].quantile(0.40))
-        min_ab=st.slider("Minimum AB to qualify for percentile pool",10,int(all_seasons['ab'].max()),suggested_min,5)
-        qual=all_seasons[all_seasons['ab']>=min_ab].copy()
-        st.caption(f"Percentile pool: {len(qual)} qualified season-rows across {all_years}")
+st.markdown("---")
 
-        st.markdown("---")
-        col1, col2 = st.columns([2,1])
-        with col1:
-            player_names=sorted(df['player'].unique().tolist())
-            search=st.selectbox("Search player",[""] + player_names)
-        with col2:
-            if search:
-                player_years=sorted(df[df['player_norm']==search.strip().lower()]['year'].astype(int).unique().tolist())
-                selected_year=st.selectbox("Season",player_years,index=len(player_years)-1)
-            else:
-                st.selectbox("Season",["—"],disabled=True)
-                selected_year=None
+# ── PLAYER SEARCH ─────────────────────────────────────────────────────────────
+st.markdown("### 🔍 Player Card")
+col1,col2=st.columns([2,1])
+with col1:
+    search=st.selectbox("Search player",[""] + sorted(df['player'].unique().tolist()))
+with col2:
+    if search:
+        player_years=sorted(df[df['player_norm']==search.strip().lower()]['year'].astype(int).unique().tolist(),reverse=True)
+        selected_year=st.selectbox("Season",["Select a year..."]+[str(y) for y in player_years])
+    else:
+        st.selectbox("Season",["—"],disabled=True)
+        selected_year="Select a year..."
 
-        if search and selected_year:
-            season_row=df[(df['player_norm']==search.strip().lower())&(df['year'].astype(int)==int(selected_year))]
-            if season_row.empty:
-                st.warning("No data found for that player/season combination.")
-            else:
-                p=season_row.iloc[0]
-                with st.spinner("Building card..."):
-                    buf=build_card(p, qual, min_ab, selected_year, all_years)
-                st.image(buf,use_column_width=True)
-                st.download_button("⬇ Download Card PNG",data=buf,
-                                   file_name=f"{search.replace(' ','_')}_{selected_year}_card.png",
-                                   mime="image/png")
-    except Exception as e:
-        st.error(f"Error: {e}"); st.exception(e)
-else:
-    st.info("Upload your league CSV above to get started.")
+if search and selected_year not in ["Select a year...","—",""]:
+    season_row=df[(df['player_norm']==search.strip().lower())&(df['year'].astype(int)==int(selected_year))]
+    if season_row.empty:
+        st.warning("No data found for that player/season.")
+    else:
+        p=season_row.iloc[0]
+        with st.spinner("Building card..."):
+            buf=build_card(p,qual,min_ab,selected_year,all_years)
+        st.image(buf,use_column_width=True)
+        st.download_button("⬇ Download Card PNG",data=buf,
+                           file_name=f"{search.replace(' ','_')}_{selected_year}_card.png",
+                           mime="image/png")
