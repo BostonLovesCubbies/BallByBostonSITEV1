@@ -25,7 +25,7 @@ STAT_DEFS = [
     ('kpct','K%',False,'.1f'),('bbpct','BB%',True,'.1f'),
 ]
 
-DATA_PATH = 'data/hitters.csv'
+DATA_PATH = 'hitters.csv'
 LEADERBOARD_STATS = ['avg','obp','slg','ops','woba','iso','hr','rbi','sb']
 LEADERBOARD_LABELS = {'avg':'AVG','obp':'OBP','slg':'SLG','ops':'OPS',
                       'woba':'wOBA','iso':'ISO','hr':'HR','rbi':'RBI','sb':'SB'}
